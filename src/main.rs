@@ -1,13 +1,29 @@
+mod db;
+mod models;
+
+use std::env;
 use std::fs::{self};
 use std::io::{Error, Write};
+use std::thread::sleep;
+use std::time::Duration;
 
 use rss::Channel;
 use serde::Serialize;
 use webpage::{Webpage, WebpageOptions};
+use models::SourceType;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    let url = "https://columbiabasinherald.com/";
+    /*let result: Result<Vec<SourceType>, sqlx::Error> = db::source_types().await;
+    match result {
+        Ok(types) => {
+            types.iter().for_each(|row| println!("{:?}", row));
+        },
+        Err(err) => println!("{}", err),
+    }*/
+
+
+    let url = "https://businesspulse.com/";
 
     // Generate timestamped directory and slug
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
@@ -32,11 +48,33 @@ async fn main() -> Result<(), Error> {
 
     // If there's a feed available, write it to a file
     if webpage.html.feed.is_some() {
-        let feed_url = webpage.html.feed.unwrap();
-        handle_feed(&feed_url, &dir_path).await.expect("Feed error");
+        let mut orig_feed_url = webpage.html.feed.unwrap();
+        let feed_url = get_feed_url(&url, orig_feed_url).await;
+        handle_feed(&feed_url, &dir_path, false).await.expect("Feed error");
     }
 
     Ok(())
+}
+
+async fn get_feed_url(url: &str, orig_feed_url: String) -> String {
+    let mut feed_url = orig_feed_url.clone();
+    println!("Orig feed URL: {}", feed_url);
+
+    if feed_url.starts_with("http") {
+        return feed_url;
+    }
+
+    if feed_url.chars().next().map_or(false, |c| c.is_alphabetic()) {
+        feed_url = format!("{}/{}", &url, &feed_url);
+    } else if feed_url.starts_with('/') {
+        feed_url = format!("{}{}", &url, &feed_url);
+    } else {
+        eprintln!("Feed URL is not valid: {}", feed_url);
+    }
+
+    println!("Feed URL: {}", feed_url);
+
+    return feed_url;
 }
 
 async fn write_file(dir_path: String, file_name: &str, content: &String) -> Result<String, Error>
@@ -57,7 +95,7 @@ async fn write_json_file<T>(dir_path: String, file_name: &str, content: &T) -> R
     Ok(info_path)
 }
 
-async fn handle_feed(feed_url: &str, dir_path: &str) -> Result<(), Error> {
+async fn handle_feed(feed_url: &str, dir_path: &str, is_retry: bool) -> Result<(), Error> {
     let feed_options = WebpageOptions { allow_insecure: true, ..Default::default() };
     let feed_webpage = Webpage::from_url(&feed_url, feed_options);
     let webpage = match feed_webpage {
@@ -70,15 +108,10 @@ async fn handle_feed(feed_url: &str, dir_path: &str) -> Result<(), Error> {
 
     // Write the feed body to a file
     let feed_content = &webpage.http.body;
-    let feed_content_path = format!("{}/{}", dir_path, "feed.txt");
-    let mut file: std::fs::File = std::fs::File::create(&feed_content_path)?;
-    file.write_all(feed_content.as_bytes())?;
+    write_file(dir_path.to_string(), "feed.txt", &feed_content).await?;
 
     // Write the feed info to a file
-    let feed_info_path = format!("{}/{}", dir_path, "feed-info.json");
-    let mut feed_info_file: std::fs::File = std::fs::File::create(&feed_info_path)?;
-    let feed_info_json = serde_json::to_string_pretty(&webpage)?;
-    feed_info_file.write_all(&feed_info_json.as_bytes())?;
+    write_json_file(dir_path.to_string(), "feed-info.json", &webpage).await?;
 
     let feed_parsed = Channel::read_from(feed_content.as_bytes());
     match feed_parsed {
@@ -88,7 +121,14 @@ async fn handle_feed(feed_url: &str, dir_path: &str) -> Result<(), Error> {
             let mut feed_parsed_file: std::fs::File = std::fs::File::create(&feed_parsed_path)?;
             feed_parsed_file.write_all(&feed_parsed_json.as_bytes())?;
         }
-        Err(err) => eprintln!("Error parsing feed: {}", err),
+        Err(err) => {
+            eprintln!("Error parsing feed: {}", err);
+            if !is_retry {
+                println!("Retrying in 1 second...");
+                sleep(Duration::from_secs(1));
+                handle_feed(feed_url, dir_path, true);
+            }
+        },
     }
 
     Ok(())
