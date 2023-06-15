@@ -14,16 +14,15 @@ use models::SourceType;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    /*let result: Result<Vec<SourceType>, sqlx::Error> = db::source_types().await;
-    match result {
-        Ok(types) => {
-            types.iter().for_each(|row| println!("{:?}", row));
-        },
-        Err(err) => println!("{}", err),
-    }*/
 
+    let args: Vec<String> = env::args().collect();
+    println!("{:?}", args);
+    if args.len() != 2 {
+        println!("Usage: {} <url>", args[0]);
+        return Ok(());
+    }
 
-    let url = "https://businesspulse.com/";
+    let url = &args[1];
 
     // Generate timestamped directory and slug
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
