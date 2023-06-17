@@ -1,21 +1,60 @@
-mod db;
-mod models;
-
-use std::env;
 use std::fs::{self};
 use std::io::{Error, Write};
-use std::thread::sleep;
-use std::time::Duration;
 
+use atom_syndication::Feed;
 use rss::Channel;
 use serde::Serialize;
 use webpage::{Webpage, WebpageOptions};
-use models::SourceType;
+
+mod db;
+mod models;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
 
-    let args: Vec<String> = env::args().collect();
+    let source_types = db::source_types().await.unwrap();
+    println!("source_types: {:?}", source_types);
+
+    let sources = db::sources().await.unwrap();
+    println!("sources: {:?}", sources);
+
+    let feeds = db::feeds().await.unwrap();
+    println!("feeds: {:?}", feeds);
+
+    let news = db::news().await.unwrap();
+    println!("news: {:?}", news);
+
+    /*let s = models::Source {
+        id: uuid::Uuid::new_v4(),
+        name: "name".to_string(),
+        url: "url".to_string(),
+        type_id: 1,
+        paywall: None,
+        feed_available: None,
+        description: None,
+        short_name: None,
+        state: None,
+        city: None,
+        create_timestamp: chrono::Utc::now().into(),
+    };
+
+    let saved_s = db::upsert_source(s).await;
+    println!("Saved source: {:?}", saved_s);*/
+
+    /*let f = models::Feed {
+        id: uuid::Uuid::new_v4(),
+        source_id: Default::default(),
+        url: "https://this-week-in-rust.org/atom.xml".to_string(),
+        title: "This Week in Rust".to_string(),
+        create_timestamp: None,
+        feed_type: None,
+        ttl: None,
+    };
+    let saved_f = db::upsert_feed(f).await;
+    println!("Saved feed: {:?}", saved_f);*/
+
+
+    /*let args: Vec<String> = env::args().collect();
     println!("{:?}", args);
     if args.len() != 2 {
         println!("Usage: {} <url>", args[0]);
@@ -42,15 +81,15 @@ async fn main() -> Result<(), Error> {
     };
 
     let content = &webpage.http.body;
-    write_file(dir_path.clone(), "content.html", &content).await?;
-    write_json_file(dir_path.clone(), "html-info.json", &webpage).await?;
+    write_file(dir_path.as_str(), "content.html", &content).await?;
+    write_json_file(dir_path.as_str(), "html-info.json", &webpage).await?;
 
     // If there's a feed available, write it to a file
     if webpage.html.feed.is_some() {
         let mut orig_feed_url = webpage.html.feed.unwrap();
         let feed_url = get_feed_url(&url, orig_feed_url).await;
-        handle_feed(&feed_url, &dir_path, false).await.expect("Feed error");
-    }
+        handle_feed(&feed_url, &dir_path).await.expect("Feed error");
+    }*/
 
     Ok(())
 }
@@ -76,25 +115,25 @@ async fn get_feed_url(url: &str, orig_feed_url: String) -> String {
     return feed_url;
 }
 
-async fn write_file(dir_path: String, file_name: &str, content: &String) -> Result<String, Error>
+async fn write_file(dir_path: &str, file_name: &str, content: &String) -> Result<String, Error>
 {
     let content_path = format!("{}/{}", dir_path, file_name);
-    let mut file: std::fs::File = std::fs::File::create(&content_path)?;
+    let mut file: fs::File = fs::File::create(&content_path)?;
     file.write_all(content.as_bytes())?;
     Ok(content_path)
 }
 
-async fn write_json_file<T>(dir_path: String, file_name: &str, content: &T) -> Result<String, Error>
+async fn write_json_file<T>(dir_path: &str, file_name: &str, content: &T) -> Result<String, Error>
     where T: ?Sized + Serialize
 {
     let info_path = format!("{}/{}", dir_path, file_name);
-    let mut file: std::fs::File = std::fs::File::create(&info_path)?;
+    let mut file: fs::File = fs::File::create(&info_path)?;
     let info_json = serde_json::to_string_pretty(&content)?;
     file.write_all(&info_json.as_bytes())?;
     Ok(info_path)
 }
 
-async fn handle_feed(feed_url: &str, dir_path: &str, is_retry: bool) -> Result<(), Error> {
+async fn handle_feed(feed_url: &str, dir_path: &str) -> Result<(), Error> {
     let feed_options = WebpageOptions { allow_insecure: true, ..Default::default() };
     let feed_webpage = Webpage::from_url(&feed_url, feed_options);
     let webpage = match feed_webpage {
@@ -107,31 +146,62 @@ async fn handle_feed(feed_url: &str, dir_path: &str, is_retry: bool) -> Result<(
 
     // Write the feed body to a file
     let feed_content = &webpage.http.body;
-    write_file(dir_path.to_string(), "feed.txt", &feed_content).await?;
+
+    write_file(dir_path, "feed.txt", &feed_content).await?;
 
     // Write the feed info to a file
-    write_json_file(dir_path.to_string(), "feed-info.json", &webpage).await?;
+    write_json_file(dir_path, "feed-info.json", &webpage).await?;
 
-    let feed_parsed = Channel::read_from(feed_content.as_bytes());
-    match feed_parsed {
-        Ok(channel) => {
-            let feed_parsed_json = serde_json::to_string_pretty(&channel)?;
-            let feed_parsed_path = format!("{}/{}", dir_path, "feed-parsed.json");
-            let mut feed_parsed_file: std::fs::File = std::fs::File::create(&feed_parsed_path)?;
-            feed_parsed_file.write_all(&feed_parsed_json.as_bytes())?;
+    let rss_parse_result = handle_rss_feed(dir_path, feed_content.to_string()).await;
+    if rss_parse_result.is_err() {
+        println!("Trying to parse as Atom feed...");
+        let atom_parse_result = handle_atom_feed(dir_path, feed_content).await;
+        if atom_parse_result.is_err() {
+            println!("Error parsing Atom feed: {}", atom_parse_result.err().unwrap());
+        } else {
+            println!("Atom feed parsed successfully");
+            // TODO save Atom feed stories to db
         }
-        Err(err) => {
-            eprintln!("Error parsing feed: {}", err);
-            if !is_retry {
-                println!("Retrying in 1 second...");
-                sleep(Duration::from_secs(1));
-                handle_feed(feed_url, dir_path, true);
-            }
-        },
+    } else {
+        println!("RSS feed parsed successfully");
+        // TODO save RSS feed stories to db
     }
 
     Ok(())
 }
+
+async fn handle_atom_feed(dir_path: &str, feed_content: &str) -> Result<Feed, atom_syndication::Error> {
+    let feed_parsed = Feed::read_from(feed_content.as_bytes());
+    let parsed_file_path = format!("{}/{}", dir_path, "feed-parsed.json");
+    match &feed_parsed {
+        Ok(feed) => {
+            let feed_parsed_json = serde_json::to_string_pretty(&feed).expect("Unable to serialize Atom feed");
+            let mut feed_parsed_file: fs::File = fs::File::create(&parsed_file_path).expect("Unable to create feed parsed file");
+            feed_parsed_file.write_all(&feed_parsed_json.as_bytes()).expect("Unable to write feed parsed file");
+        }
+        Err(err) => println!("Error parsing RSS feed: {}", err),
+    }
+
+    return feed_parsed;
+}
+
+async fn handle_rss_feed(dir_path: &str, feed_content: String) -> Result<Channel, rss::Error> {
+    let feed_parsed = Channel::read_from(feed_content.as_bytes());
+    let parsed_file_path = format!("{}/{}", dir_path, "feed-parsed.json");
+    println!("Parsed file path: {}", parsed_file_path);
+    match &feed_parsed {
+        Ok(channel) => {
+            let feed_parsed_json = serde_json::to_string_pretty(&channel).expect("Unable to serialize RSS channel");
+            let feed_parsed_path = format!("{}/{}", dir_path, parsed_file_path);
+            let mut feed_parsed_file: fs::File = fs::File::create(&feed_parsed_path).expect("Unable to create feed parsed file");
+            feed_parsed_file.write_all(&feed_parsed_json.as_bytes()).expect("Unable to write feed parsed file");
+        }
+        Err(err) => println!("Error parsing RSS feed: {}", err),
+    }
+
+    return feed_parsed;
+}
+
 
 /*
 /// Using playwright, fetch the content of the URL
