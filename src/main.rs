@@ -1,3 +1,4 @@
+use std::env;
 use std::fs::{self};
 use std::io::{Error, Write};
 
@@ -5,6 +6,7 @@ use atom_syndication::Feed;
 use rss::Channel;
 use serde::Serialize;
 use webpage::{Webpage, WebpageOptions};
+use crate::models::{Source};
 
 mod db;
 mod models;
@@ -12,7 +14,7 @@ mod models;
 #[tokio::main]
 async fn main() -> Result<(), Error> {
 
-    let source_types = db::source_types().await.unwrap();
+    /*let source_types = db::source_types().await.unwrap();
     println!("source_types: {:?}", source_types);
 
     let sources = db::sources().await.unwrap();
@@ -22,7 +24,27 @@ async fn main() -> Result<(), Error> {
     println!("feeds: {:?}", feeds);
 
     let news = db::news().await.unwrap();
-    println!("news: {:?}", news);
+    println!("news: {:?}", news);*/
+
+    /*let st = SourceType::new(5, "Website".to_string(), None);
+    let id: anyhow::Result<i32> = st.save().await;
+    if id.is_err() {
+        println!("Error saving SourceType: {:?}", id.err().unwrap());
+    } else {
+        println!("Saved: {:?}", st);
+    }*/
+
+    /*let st = db::source_type_by_name("Website").await.expect("Error getting source type");
+
+    let s = Source::new("This Week in Rust".to_owned(), "https://this-week-in-rust.org/".to_owned(), st.id);
+    let id = s.save().await;
+    if id.is_err() {
+        println!("Error saving Source: {:?}", id.err().unwrap());
+    } else {
+        println!("Saved: {:?}", s);
+    }*/
+
+
 
     /*let s = models::Source {
         id: uuid::Uuid::new_v4(),
@@ -54,7 +76,7 @@ async fn main() -> Result<(), Error> {
     println!("Saved feed: {:?}", saved_f);*/
 
 
-    /*let args: Vec<String> = env::args().collect();
+    let args: Vec<String> = env::args().collect();
     println!("{:?}", args);
     if args.len() != 2 {
         println!("Usage: {} <url>", args[0]);
@@ -71,8 +93,8 @@ async fn main() -> Result<(), Error> {
     fs::create_dir_all(&dir_path)?;
 
     let html_options = WebpageOptions { allow_insecure: true, ..Default::default() };
-    let webpage = Webpage::from_url(&url, html_options);
-    let webpage = match webpage {
+    let webpage_result = Webpage::from_url(&url, html_options);
+    let webpage = match webpage_result {
         Ok(v) => v,
         Err(e) => {
             println!("Error fetching html webpage: {}", e);
@@ -80,18 +102,31 @@ async fn main() -> Result<(), Error> {
         }
     };
 
+    // save source to db
+    let source = webpage_to_source(&webpage);
+    source.save().await.expect("Error saving source");
+
+    println!("source: {:?}", source);
+
     let content = &webpage.http.body;
     write_file(dir_path.as_str(), "content.html", &content).await?;
     write_json_file(dir_path.as_str(), "html-info.json", &webpage).await?;
 
     // If there's a feed available, write it to a file
     if webpage.html.feed.is_some() {
-        let mut orig_feed_url = webpage.html.feed.unwrap();
+        let orig_feed_url = webpage.html.feed.unwrap();
         let feed_url = get_feed_url(&url, orig_feed_url).await;
-        handle_feed(&feed_url, &dir_path).await.expect("Feed error");
-    }*/
+        handle_feed(source.id, &feed_url, &dir_path).await.expect("Feed error");
+    }
 
     Ok(())
+}
+
+fn webpage_to_source(webpage: &Webpage) -> Source {
+    let title = webpage.html.title.clone().unwrap();
+    let url = webpage.http.url.clone();
+    let type_id = 5; // Website
+    Source::new(title, url, type_id)
 }
 
 async fn get_feed_url(url: &str, orig_feed_url: String) -> String {
@@ -133,10 +168,10 @@ async fn write_json_file<T>(dir_path: &str, file_name: &str, content: &T) -> Res
     Ok(info_path)
 }
 
-async fn handle_feed(feed_url: &str, dir_path: &str) -> Result<(), Error> {
+async fn handle_feed(source_id: uuid::Uuid, feed_url: &str, dir_path: &str) -> Result<(), Error> {
     let feed_options = WebpageOptions { allow_insecure: true, ..Default::default() };
-    let feed_webpage = Webpage::from_url(&feed_url, feed_options);
-    let webpage = match feed_webpage {
+    let feed_webpage_result = Webpage::from_url(&feed_url, feed_options);
+    let feed_webpage = match feed_webpage_result {
         Ok(v) => v,
         Err(e) => {
             eprintln!("Error fetching feed webpage: {}", e);
@@ -145,12 +180,12 @@ async fn handle_feed(feed_url: &str, dir_path: &str) -> Result<(), Error> {
     };
 
     // Write the feed body to a file
-    let feed_content = &webpage.http.body;
+    let feed_content = &feed_webpage.http.body;
 
     write_file(dir_path, "feed.txt", &feed_content).await?;
 
     // Write the feed info to a file
-    write_json_file(dir_path, "feed-info.json", &webpage).await?;
+    write_json_file(dir_path, "feed-info.json", &feed_webpage).await?;
 
     let rss_parse_result = handle_rss_feed(dir_path, feed_content.to_string()).await;
     if rss_parse_result.is_err() {
@@ -160,14 +195,37 @@ async fn handle_feed(feed_url: &str, dir_path: &str) -> Result<(), Error> {
             println!("Error parsing Atom feed: {}", atom_parse_result.err().unwrap());
         } else {
             println!("Atom feed parsed successfully");
+
+            let atom = atom_parse_result.unwrap();
+            let title = Option::from(atom.title.value);
+            let feed_type = Option::from("Atom".to_string());
+
+            // save feed to db
+            let feed: models::Feed = feed_webpage_to_feed(source_id, title, feed_type, &feed_webpage);
+            feed.save().await.expect("Error saving feed");
+
             // TODO save Atom feed stories to db
         }
     } else {
         println!("RSS feed parsed successfully");
+
+        let rss = rss_parse_result.unwrap();
+        let title = Option::from(rss.title);
+        let feed_type = Option::from("RSS".to_string());
+
+        // save feed to db
+        let feed: models::Feed = feed_webpage_to_feed(source_id, title, feed_type, &feed_webpage);
+        feed.save().await.expect("Error saving feed");
+
         // TODO save RSS feed stories to db
     }
 
     Ok(())
+}
+
+fn feed_webpage_to_feed(source_id: uuid::Uuid, title: Option<String>, feed_type: Option<String>, webpage: &Webpage) -> models::Feed {
+    let url = webpage.http.url.clone();
+    models::Feed::new(source_id, url, title, feed_type)
 }
 
 async fn handle_atom_feed(dir_path: &str, feed_content: &str) -> Result<Feed, atom_syndication::Error> {

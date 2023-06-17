@@ -1,10 +1,25 @@
 use chrono::Utc;
+use crate::db;
 
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
 pub(crate) struct SourceType {
     pub id: i32,
     pub name: String,
     pub description: Option<String>,
+}
+
+impl SourceType {
+    pub fn new(id: i32, name: String, description: Option<String>) -> Self {
+        Self {
+            id,
+            name,
+            description,
+        }
+    }
+
+    pub async fn save(&self) -> anyhow::Result<i32> {
+        db::save_source_type(self).await
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
@@ -22,15 +37,55 @@ pub(crate) struct Source {
     pub create_timestamp: chrono::DateTime<Utc>,
 }
 
+impl Source {
+    pub fn new(name: String, url: String, type_id: i32) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4(),
+            name,
+            url,
+            type_id,
+            paywall: None,
+            feed_available: None,
+            description: None,
+            short_name: None,
+            state: None,
+            city: None,
+            create_timestamp: Utc::now().into(),
+        }
+    }
+
+    pub async fn save(&self) -> anyhow::Result<uuid::Uuid> {
+        db::save_source(self).await
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
 pub(crate) struct Feed {
     pub id: uuid::Uuid,
-    pub source_id: Option<uuid::Uuid>,
+    pub source_id: uuid::Uuid,
     pub url: String,
     pub title: Option<String>,
     pub create_timestamp: chrono::DateTime<Utc>,
     pub feed_type: Option<String>,
     pub ttl: Option<i32>,
+}
+
+impl Feed {
+    pub fn new(source_id: uuid::Uuid, url: String, title: Option<String>, feed_type: Option<String>) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4(),
+            source_id,
+            url,
+            title,
+            create_timestamp: Utc::now().into(),
+            feed_type,
+            ttl: None,
+        }
+    }
+
+    pub async fn save(&self) -> anyhow::Result<uuid::Uuid> {
+        db::save_feed(self).await
+    }
 }
 
 

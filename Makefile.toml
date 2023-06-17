@@ -1,0 +1,8 @@
+[tasks.sqlx-prepare]
+command = "cargo"
+args = [
+    "sqlx",
+    "prepare",
+    "--database-url",
+    "${DATABASE_URL}",
+]
