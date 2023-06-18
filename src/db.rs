@@ -56,6 +56,7 @@ pub(crate) async fn save_source(source: &Source) -> anyhow::Result<uuid::Uuid> {
     let rec = sqlx::query!(r#"
 INSERT INTO source (id, name, url, type_id, paywall, feed_available, description, short_name, state, city, create_timestamp)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+ON CONFLICT (url) DO NOTHING
 RETURNING id
 "#,
         source.id, source.name, source.url, source.type_id, source.paywall, source.feed_available, source.description, source.short_name, source.state, source.city, source.create_timestamp)
@@ -66,7 +67,13 @@ RETURNING id
 
 pub(crate) async fn save_feed(feed: &Feed) -> anyhow::Result<uuid::Uuid> {
     let pool: Pool<Postgres> = get_pool().await;
-    let rec = sqlx::query!("INSERT INTO feed (id, url, title, source_id, feed_type) VALUES ($1, $2, $3, $4, $5) RETURNING id", feed.id, feed.url, feed.title, feed.source_id, feed.feed_type)
+    let rec = sqlx::query!(r#"
+INSERT INTO feed (id, url, title, source_id, feed_type)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (url) DO NOTHING
+RETURNING id
+    "#,
+        feed.id, feed.url, feed.title, feed.source_id, feed.feed_type)
         .fetch_one(&pool)
         .await?;
     Ok(rec.id)
@@ -74,11 +81,12 @@ pub(crate) async fn save_feed(feed: &Feed) -> anyhow::Result<uuid::Uuid> {
 
 pub(crate) async fn save_news_item(ni: &NewsItem) -> anyhow::Result<uuid::Uuid> {
     let pool: Pool<Postgres> = get_pool().await;
-    let rec = sqlx::query!(
-        r#"INSERT INTO news
-        (id, title, url, published_timestamp, guid, feed_id)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING id"#,
+    let rec = sqlx::query!(r#"
+INSERT INTO news (id, title, url, published_timestamp, guid, feed_id)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (guid) DO NOTHING
+RETURNING id
+        "#,
         ni.id, ni.title, ni.url, ni.published_timestamp, ni.guid, ni.feed_id)
         .fetch_one(&pool)
         .await?;

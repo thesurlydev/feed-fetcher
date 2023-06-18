@@ -168,7 +168,11 @@ async fn handle_feed(source_id: uuid::Uuid, feed_url: &str, dir_path: &str) -> R
 
         // save feed to db
         let feed: models::Feed = feed_webpage_to_feed(source_id, title, feed_type, &feed_webpage);
-        feed.save().await.expect("Error saving feed");
+        let maybe_id = feed.save().await;
+        match maybe_id {
+            Ok(id) => println!("Feed saved successfully: {}", id),
+            Err(e) => println!("Feed not saved (possibly duplicate): {}", e)
+        }
 
         let items: Vec<Item> = channel.items;
         if items.len() == 0 {
@@ -176,7 +180,11 @@ async fn handle_feed(source_id: uuid::Uuid, feed_url: &str, dir_path: &str) -> R
         } else {
             for item in items {
                 let news_item = item_to_news_item(feed.id, &item);
-                news_item.save().await.expect("Error saving news item");
+                let maybe_id = news_item.save().await;
+                match maybe_id {
+                    Ok(id) => println!("News item saved successfully: {}", id),
+                    Err(e) => println!("News item not saved (possibly duplicate): {}", e)
+                }
             }
         }
     }
