@@ -1,6 +1,5 @@
 use std::env;
 use sqlx::{PgPool, Pool, Postgres, query_as};
-use sqlx::postgres::PgQueryResult;
 use crate::models::{Feed, NewsItem, Source, SourceType};
 
 pub(crate) async fn source_types() -> Result<Vec<SourceType>, sqlx::Error> {
@@ -46,27 +45,6 @@ pub(crate) async fn save_source_type(source_type: &SourceType) -> anyhow::Result
     Ok(rec.id)
 }
 
-/*
-pub(crate) async fn upsert_feed(feed: Feed) -> Result<Feed, sqlx::Error> {
-    let pool: Pool<Postgres> = PgPool::connect(&env::var("DATABASE_URL").unwrap()).await?;
-
-    query_as!(Feed, r#"
-        INSERT INTO feed (id, url, title)
-        VALUES ($1, $2, $3)
-        RETURNING *
-        "#, feed.id, feed.url, feed.title).await
-}*/
-
-/*pub(crate) async fn upsert_source(src: Source) -> Result<Source, sqlx::Error> {
-    let pool: Pool<Postgres> = get_pool().await;
-
-    query_as!(Source, r#"
-        INSERT INTO source (id, name, url, type_id, paywall, feed_available, description, short_name, state, city, create_timestamp)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-        RETURNING *
-        "#, src.id, src.name, src.url, src.type_id, src.paywall, src.feed_available, src.description, src.short_name, src.state, src.city, src.create_timestamp);
-}*/
-
 async fn get_pool() -> Pool<Postgres> {
     let db_url = &env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let pool: Pool<Postgres> = PgPool::connect(db_url.as_str()).await.expect("Failed to connect to Postgres");
@@ -75,8 +53,11 @@ async fn get_pool() -> Pool<Postgres> {
 
 pub(crate) async fn save_source(source: &Source) -> anyhow::Result<uuid::Uuid> {
     let pool: Pool<Postgres> = get_pool().await;
-    let rec = sqlx::query!("INSERT INTO source (id, name, url, type_id, paywall, feed_available, description, short_name, state, city, create_timestamp) \
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id",
+    let rec = sqlx::query!(r#"
+INSERT INTO source (id, name, url, type_id, paywall, feed_available, description, short_name, state, city, create_timestamp)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+RETURNING id
+"#,
         source.id, source.name, source.url, source.type_id, source.paywall, source.feed_available, source.description, source.short_name, source.state, source.city, source.create_timestamp)
         .fetch_one(&pool)
         .await?;

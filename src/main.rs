@@ -3,7 +3,7 @@ use std::fs::{self};
 use std::io::{Error, Write};
 
 use atom_syndication::{Entry, Feed};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use rss::{Channel, Item};
 use serde::Serialize;
 use webpage::{Webpage, WebpageOptions};
@@ -15,68 +15,6 @@ mod models;
 #[tokio::main]
 async fn main() -> Result<(), Error> {
 
-    /*let source_types = db::source_types().await.unwrap();
-    println!("source_types: {:?}", source_types);
-
-    let sources = db::sources().await.unwrap();
-    println!("sources: {:?}", sources);
-
-    let feeds = db::feeds().await.unwrap();
-    println!("feeds: {:?}", feeds);
-
-    let news = db::news().await.unwrap();
-    println!("news: {:?}", news);*/
-
-    /*let st = SourceType::new(5, "Website".to_string(), None);
-    let id: anyhow::Result<i32> = st.save().await;
-    if id.is_err() {
-        println!("Error saving SourceType: {:?}", id.err().unwrap());
-    } else {
-        println!("Saved: {:?}", st);
-    }*/
-
-    /*let st = db::source_type_by_name("Website").await.expect("Error getting source type");
-
-    let s = Source::new("This Week in Rust".to_owned(), "https://this-week-in-rust.org/".to_owned(), st.id);
-    let id = s.save().await;
-    if id.is_err() {
-        println!("Error saving Source: {:?}", id.err().unwrap());
-    } else {
-        println!("Saved: {:?}", s);
-    }*/
-
-
-
-    /*let s = models::Source {
-        id: uuid::Uuid::new_v4(),
-        name: "name".to_string(),
-        url: "url".to_string(),
-        type_id: 1,
-        paywall: None,
-        feed_available: None,
-        description: None,
-        short_name: None,
-        state: None,
-        city: None,
-        create_timestamp: chrono::Utc::now().into(),
-    };
-
-    let saved_s = db::upsert_source(s).await;
-    println!("Saved source: {:?}", saved_s);*/
-
-    /*let f = models::Feed {
-        id: uuid::Uuid::new_v4(),
-        source_id: Default::default(),
-        url: "https://this-week-in-rust.org/atom.xml".to_string(),
-        title: "This Week in Rust".to_string(),
-        create_timestamp: None,
-        feed_type: None,
-        ttl: None,
-    };
-    let saved_f = db::upsert_feed(f).await;
-    println!("Saved feed: {:?}", saved_f);*/
-
-
     let args: Vec<String> = env::args().collect();
     println!("{:?}", args);
     if args.len() != 2 {
@@ -86,6 +24,12 @@ async fn main() -> Result<(), Error> {
 
     let url = &args[1];
 
+    handle_url(url).await.expect("Error handling url");
+
+    Ok(())
+}
+
+async fn handle_url(url: &str) -> anyhow::Result<()> {
     // Generate timestamped directory and slug
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
     let url_simplified = url.replace("https://", "").replace("http://", "").replace("www.", "");
@@ -226,7 +170,6 @@ async fn handle_feed(source_id: uuid::Uuid, feed_url: &str, dir_path: &str) -> R
         let feed: models::Feed = feed_webpage_to_feed(source_id, title, feed_type, &feed_webpage);
         feed.save().await.expect("Error saving feed");
 
-        // TODO save RSS feed stories to db
         let items: Vec<Item> = channel.items;
         if items.len() == 0 {
             eprintln!("No items found in RSS feed");
@@ -246,9 +189,18 @@ fn item_to_news_item(feed_id: uuid::Uuid, item: &Item) -> models::NewsItem {
     let title = item.title.clone().expect("Unable to get title");
     let guid = item.guid.clone().expect("Unable to get guid").value;
     let url = item.link.clone().expect("Unable to get link");
-    // TODO get actual published date and convert
-    let published = Utc::now();
-    models::NewsItem::new(feed_id, guid, title, published, url)
+    let maybe_pub_date = item.pub_date.clone();
+    let pub_date: DateTime<Utc> = match maybe_pub_date {
+        None => Utc::now(),
+        Some(pd) => {
+            DateTime::<Utc>::from_utc(
+                NaiveDateTime::parse_from_str(pd.as_str(), "%a, %d %b %Y %H:%M:%S GMT")
+                    .expect("Failed to parse date and time"),
+                Utc,
+            )
+        }
+    };
+    models::NewsItem::new(feed_id, guid, title, pub_date, url)
 }
 
 
