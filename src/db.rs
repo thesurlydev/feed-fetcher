@@ -90,3 +90,16 @@ pub(crate) async fn save_feed(feed: &Feed) -> anyhow::Result<uuid::Uuid> {
         .await?;
     Ok(rec.id)
 }
+
+pub(crate) async fn save_news_item(ni: &NewsItem) -> anyhow::Result<uuid::Uuid> {
+    let pool: Pool<Postgres> = get_pool().await;
+    let rec = sqlx::query!(
+        r#"INSERT INTO news
+        (id, title, url, published_timestamp, guid, feed_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id"#,
+        ni.id, ni.title, ni.url, ni.published_timestamp, ni.guid, ni.feed_id)
+        .fetch_one(&pool)
+        .await?;
+    Ok(rec.id)
+}

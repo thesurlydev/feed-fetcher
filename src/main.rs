@@ -2,8 +2,9 @@ use std::env;
 use std::fs::{self};
 use std::io::{Error, Write};
 
-use atom_syndication::Feed;
-use rss::Channel;
+use atom_syndication::{Entry, Feed};
+use chrono::{DateTime, Utc};
+use rss::{Channel, Item};
 use serde::Serialize;
 use webpage::{Webpage, WebpageOptions};
 use crate::models::{Source};
@@ -204,13 +205,21 @@ async fn handle_feed(source_id: uuid::Uuid, feed_url: &str, dir_path: &str) -> R
             let feed: models::Feed = feed_webpage_to_feed(source_id, title, feed_type, &feed_webpage);
             feed.save().await.expect("Error saving feed");
 
-            // TODO save Atom feed stories to db
+            let entries: Vec<Entry> = atom.entries;
+            if entries.len() == 0 {
+                eprintln!("No entries found in Atom feed");
+            } else {
+                for entry in entries {
+                    let news_item = entry_to_news_item(feed.id, &entry);
+                    news_item.save().await.expect("Error saving news item");
+                }
+            }
         }
     } else {
         println!("RSS feed parsed successfully");
 
-        let rss = rss_parse_result.unwrap();
-        let title = Option::from(rss.title);
+        let channel: Channel = rss_parse_result.unwrap();
+        let title = Option::from(channel.title);
         let feed_type = Option::from("RSS".to_string());
 
         // save feed to db
@@ -218,9 +227,38 @@ async fn handle_feed(source_id: uuid::Uuid, feed_url: &str, dir_path: &str) -> R
         feed.save().await.expect("Error saving feed");
 
         // TODO save RSS feed stories to db
+        let items: Vec<Item> = channel.items;
+        if items.len() == 0 {
+            eprintln!("No items found in RSS feed");
+        } else {
+            for item in items {
+                let news_item = item_to_news_item(feed.id, &item);
+                news_item.save().await.expect("Error saving news item");
+            }
+        }
     }
 
     Ok(())
+}
+
+/// Convert an RSS item to a NewsItem
+fn item_to_news_item(feed_id: uuid::Uuid, item: &Item) -> models::NewsItem {
+    let title = item.title.clone().expect("Unable to get title");
+    let guid = item.guid.clone().expect("Unable to get guid").value;
+    let url = item.link.clone().expect("Unable to get link");
+    // TODO get actual published date and convert
+    let published = Utc::now();
+    models::NewsItem::new(feed_id, guid, title, published, url)
+}
+
+
+/// Convert an Atom entry to a NewsItem
+fn entry_to_news_item(feed_id: uuid::Uuid, entry: &Entry) -> models::NewsItem {
+    let title = entry.title.clone().value;
+    let guid = entry.id.clone();
+    let url = entry.links[0].href.clone();
+    let published = entry.published.clone().expect("Unable to get published date");
+    models::NewsItem::new(feed_id, guid, title, DateTime::from(published), url)
 }
 
 fn feed_webpage_to_feed(source_id: uuid::Uuid, title: Option<String>, feed_type: Option<String>, webpage: &Webpage) -> models::Feed {
@@ -246,12 +284,10 @@ async fn handle_atom_feed(dir_path: &str, feed_content: &str) -> Result<Feed, at
 async fn handle_rss_feed(dir_path: &str, feed_content: String) -> Result<Channel, rss::Error> {
     let feed_parsed = Channel::read_from(feed_content.as_bytes());
     let parsed_file_path = format!("{}/{}", dir_path, "feed-parsed.json");
-    println!("Parsed file path: {}", parsed_file_path);
     match &feed_parsed {
         Ok(channel) => {
             let feed_parsed_json = serde_json::to_string_pretty(&channel).expect("Unable to serialize RSS channel");
-            let feed_parsed_path = format!("{}/{}", dir_path, parsed_file_path);
-            let mut feed_parsed_file: fs::File = fs::File::create(&feed_parsed_path).expect("Unable to create feed parsed file");
+            let mut feed_parsed_file: fs::File = fs::File::create(&parsed_file_path).expect("Unable to create feed parsed file");
             feed_parsed_file.write_all(&feed_parsed_json.as_bytes()).expect("Unable to write feed parsed file");
         }
         Err(err) => println!("Error parsing RSS feed: {}", err),

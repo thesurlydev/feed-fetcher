@@ -99,3 +99,26 @@ pub(crate) struct NewsItem {
     pub url: String,
     pub create_timestamp: chrono::DateTime<Utc>,
 }
+
+impl NewsItem {
+    pub fn new(
+        feed_id: uuid::Uuid,
+        guid: String,
+        title: String,
+        published_timestamp: chrono::DateTime<Utc>,
+        url: String) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4(),
+            feed_id,
+            guid,
+            title,
+            published_timestamp,
+            url,
+            create_timestamp: Utc::now().into(),
+        }
+    }
+
+    pub async fn save(&self) -> anyhow::Result<uuid::Uuid> {
+        db::save_news_item(self).await
+    }
+}
