@@ -3,18 +3,19 @@ use std::fs::{self};
 use std::io::{Error, Write};
 
 use atom_syndication::{Entry, Feed};
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
+use opml::Outline;
 use rss::{Channel, Item};
 use serde::Serialize;
 use webpage::{Webpage, WebpageOptions};
-use crate::models::{Source};
+
+use crate::models::Source;
 
 mod db;
 mod models;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-
     let args: Vec<String> = env::args().collect();
     println!("{:?}", args);
     if args.len() != 2 {
@@ -24,19 +25,94 @@ async fn main() -> Result<(), Error> {
 
     let url = &args[1];
 
-    handle_url(url).await.expect("Error handling url");
+    let dir_path = create_timestamped_dir(url).await;
+
+    if url.starts_with("http") {
+        println!("Handling url: {}", url);
+        // let dir = dir_path.clone();
+        handle_url(&dir_path, url).await.expect("Error handling url");
+    } else if url.starts_with("feed!") {
+        println!("Handling Feed url: {}", url);
+        let orig_feed_url = url.replace("feed!", "");
+        let feed_url = get_feed_url(&url, orig_feed_url).await;
+        let source_id = uuid::Uuid::try_from("5f4c7adf-2236-428b-9db6-7fbab59b4507").unwrap();
+        handle_feed(source_id, &feed_url, &dir_path).await.expect("Feed error");
+    } else if (url.starts_with("opml!")) {
+        println!("Handling OPML url: {}", url);
+
+        // strip opml! from url
+        let opml_url = url.replace("opml!", "");
+
+        // determine if url is local or remote
+        if opml_url.starts_with("http") {} else {
+            // assume local file
+            let opml_file = fs::read_to_string(opml_url).expect("Unable to read file");
+            let opml = opml::OPML::from_str(&opml_file).expect("Unable to parse OPML");
+
+            // first, get all the rss outlines from opml
+            let mut outlines = Vec::new();
+            for outline in opml.body.outlines {
+                collect_outlines(&outline, &mut outlines);
+            }
+
+            // then, handle each outline
+            for outline in outlines {
+                let dir = dir_path.clone();
+                handle_opml_outline(&dir, &outline).await;
+            }
+
+        }
+    } else {
+        println!("Unknown url type: {}", url);
+    }
 
     Ok(())
 }
 
-async fn handle_url(url: &str) -> anyhow::Result<()> {
+fn collect_outlines(outline: &Outline, outlines: &mut Vec<Outline>) {
+    // Add the current outline to the list
+    if outline.r#type.is_some() && outline.r#type.clone().unwrap() == "rss" {
+        outlines.push(outline.clone());
+    }
+
+    // Collect all child outlines recursively
+    for child in &outline.outlines {
+        collect_outlines(child, outlines);
+    }
+}
+
+async fn handle_opml_outline(dir_path: &str, outline: &Outline) {
+    println!("processing: {:?}", outline);
+
+    // save source
+    if outline.html_url.is_some() {
+        let html_url = outline.html_url.clone().unwrap();
+        let source = Source::new(outline.text.clone(), html_url, 5);
+        let source_id = source.save().await.expect(save_error("source", source.url.as_str()).as_str());
+        // save feed
+        if outline.xml_url.is_some() {
+            let feed_url = outline.xml_url.clone().unwrap();
+            println!("feed_url: {}", feed_url);
+            handle_feed(source_id, &feed_url, dir_path).await.expect(save_error("feed", &feed_url).as_str());
+        }
+    }
+}
+
+fn save_error(thing: &str, id: &str) -> String {
+    format!("Error saving {}: {}", thing, id)
+}
+
+async fn create_timestamped_dir(url: &str) -> String {
     // Generate timestamped directory and slug
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
     let url_simplified = url.replace("https://", "").replace("http://", "").replace("www.", "");
     let slug = slug::slugify(url_simplified);
     let dir_path = format!("downloads/{}_{}", timestamp, slug);
-    fs::create_dir_all(&dir_path)?;
+    fs::create_dir_all(&dir_path).expect("Unable to create directory");
+    dir_path
+}
 
+async fn handle_url(dir_path: &str, url: &str) -> anyhow::Result<()> {
     let html_options = WebpageOptions { allow_insecure: true, ..Default::default() };
     let webpage_result = Webpage::from_url(&url, html_options);
     let webpage = match webpage_result {
@@ -54,8 +130,8 @@ async fn handle_url(url: &str) -> anyhow::Result<()> {
     println!("source: {:?}", source);
 
     let content = &webpage.http.body;
-    write_file(dir_path.as_str(), "content.html", &content).await?;
-    write_json_file(dir_path.as_str(), "html-info.json", &webpage).await?;
+    write_file(dir_path, "content.html", &content).await?;
+    write_json_file(dir_path, "html-info.json", &webpage).await?;
 
     // If there's a feed available, write it to a file
     if webpage.html.feed.is_some() {
@@ -155,7 +231,11 @@ async fn handle_feed(source_id: uuid::Uuid, feed_url: &str, dir_path: &str) -> R
             } else {
                 for entry in entries {
                     let news_item = entry_to_news_item(feed.id, &entry);
-                    news_item.save().await.expect("Error saving news item");
+                    let result = news_item.save().await;
+                    match result {
+                        Ok(_) => {}
+                        Err(e) => println!("Error saving news item: {}", e)
+                    }
                 }
             }
         }
@@ -195,29 +275,54 @@ async fn handle_feed(source_id: uuid::Uuid, feed_url: &str, dir_path: &str) -> R
 /// Convert an RSS item to a NewsItem
 fn item_to_news_item(feed_id: uuid::Uuid, item: &Item) -> models::NewsItem {
     let title = item.title.clone().expect("Unable to get title");
-    let guid = item.guid.clone().expect("Unable to get guid").value;
+    // set guid to either guid or link
+    let guid = match item.guid.clone() {
+        Some(guid) => guid.value,
+        None => item.link.clone().expect("Unable to get link for guid")
+    };
     let url = item.link.clone().expect("Unable to get link");
     let maybe_pub_date = item.pub_date.clone();
     let pub_date: DateTime<Utc> = match maybe_pub_date {
-        None => Utc::now(),
-        Some(pd) => {
-            DateTime::<Utc>::from_utc(
-                NaiveDateTime::parse_from_str(pd.as_str(), "%a, %d %b %Y %H:%M:%S GMT")
-                    .expect("Failed to parse date and time"),
-                Utc,
-            )
+        Some(dt) => {
+            match parse_date(&dt) {
+                Some(dt) => dt,
+                None => {
+                    eprintln!("{}", date_parse_error(&dt));
+                    Utc::now()
+                }
+            }
         }
+        None => Utc::now()
     };
     models::NewsItem::new(feed_id, guid, title, pub_date, url)
 }
 
+fn parse_date(dt: &str) -> Option<DateTime<Utc>> {
+    let formats = [
+        "%a, %d %b %Y %H:%M:%S GMT",
+        "%a, %d %b %Y %H:%M:%S %z"
+    ];
+    for format in &formats {
+        if let Ok(dt) = DateTime::parse_from_str(dt, format) {
+            return Some(dt.with_timezone(&Utc));
+        }
+    }
+    None
+}
+
+fn date_parse_error(date: &str) -> String {
+    format!("Failed to parse date and time: {}", date)
+}
 
 /// Convert an Atom entry to a NewsItem
 fn entry_to_news_item(feed_id: uuid::Uuid, entry: &Entry) -> models::NewsItem {
     let title = entry.title.clone().value;
     let guid = entry.id.clone();
     let url = entry.links[0].href.clone();
-    let published = entry.published.clone().expect("Unable to get published date");
+    let published = match entry.published {
+        Some(p) => p,
+        None => entry.updated.clone()
+    };
     models::NewsItem::new(feed_id, guid, title, DateTime::from(published), url)
 }
 
