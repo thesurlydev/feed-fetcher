@@ -37,7 +37,7 @@ async fn main() -> Result<(), Error> {
         let feed_url = get_feed_url(&url, orig_feed_url).await;
         let source_id = uuid::Uuid::try_from("5f4c7adf-2236-428b-9db6-7fbab59b4507").unwrap();
         handle_feed(source_id, &feed_url, &dir_path).await.expect("Feed error");
-    } else if (url.starts_with("opml!")) {
+    } else if url.starts_with("opml!") {
         println!("Handling OPML url: {}", url);
 
         // strip opml! from url
@@ -93,7 +93,16 @@ async fn handle_opml_outline(dir_path: &str, outline: &Outline) {
         if outline.xml_url.is_some() {
             let feed_url = outline.xml_url.clone().unwrap();
             println!("feed_url: {}", feed_url);
-            handle_feed(source_id, &feed_url, dir_path).await.expect(save_error("feed", &feed_url).as_str());
+
+            // create feed slug
+            let url_simplified = feed_url.replace("https://", "").replace("http://", "").replace("www.", "");
+            let feed_slug = slug::slugify(url_simplified);
+
+            // create directory for feed
+            let feed_dir = format!("{}/{}", dir_path, feed_slug);
+            fs::create_dir_all(&feed_dir).expect("Unable to create directory");
+
+            handle_feed(source_id, &feed_url, &feed_dir).await.expect(save_error("feed", &feed_url).as_str());
         }
     }
 }
