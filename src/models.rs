@@ -1,4 +1,5 @@
 use chrono::Utc;
+use sqlx::{Pool, Postgres};
 use crate::db;
 
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
@@ -8,6 +9,7 @@ pub(crate) struct SourceType {
     pub description: Option<String>,
 }
 
+#[allow(dead_code)]
 impl SourceType {
     pub fn new(id: i32, name: String, description: Option<String>) -> Self {
         Self {
@@ -54,8 +56,8 @@ impl Source {
         }
     }
 
-    pub async fn save(&self) -> anyhow::Result<uuid::Uuid> {
-        db::save_source(self).await
+    pub async fn save(&self, pool: &Pool<Postgres>) -> anyhow::Result<uuid::Uuid> {
+        db::save_source(self, pool).await
     }
 }
 
@@ -83,8 +85,8 @@ impl Feed {
         }
     }
 
-    pub async fn save(&self) -> anyhow::Result<uuid::Uuid> {
-        db::save_feed(self).await
+    pub async fn save(&self, pool: &Pool<Postgres>) -> anyhow::Result<uuid::Uuid> {
+        db::save_feed(self, pool).await
     }
 }
 
@@ -118,7 +120,7 @@ impl NewsItem {
         }
     }
 
-    pub async fn save(&self) -> anyhow::Result<uuid::Uuid> {
-        db::save_news_item(self).await
+    pub async fn save(&self, pool: &Pool<Postgres>) -> anyhow::Result<uuid::Uuid> {
+        db::save_news_item(self, pool).await
     }
 }
