@@ -100,6 +100,8 @@ pub(crate) struct NewsItem {
     pub published_timestamp: chrono::DateTime<Utc>,
     pub url: String,
     pub create_timestamp: chrono::DateTime<Utc>,
+    pub raw_content_path: Option<String>,
+    pub text_content_path: Option<String>,
 }
 
 impl NewsItem {
@@ -117,6 +119,8 @@ impl NewsItem {
             published_timestamp,
             url,
             create_timestamp: Utc::now().into(),
+            raw_content_path: None,
+            text_content_path: None,
         }
     }
 

@@ -4,20 +4,22 @@ use std::io::{Error, Write};
 
 use atom_syndication::{Entry, Feed, Link};
 use chrono::{DateTime, NaiveDate, Utc};
+use log::{error, info, LevelFilter, warn};
 use opml::Outline;
 use playwright::Playwright;
 use rss::{Channel, Item};
 use serde::Serialize;
+use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
 use sqlx::{Pool, Postgres};
 use url::Url;
 use webpage::{Webpage, WebpageOptions};
-use log::{error, info, warn, LevelFilter};
-use simplelog::{ColorChoice, CombinedLogger, Config, TerminalMode, TermLogger, WriteLogger};
 
+use crate::extract::extract_text_from_str;
 use crate::models::Source;
 
 mod db;
 mod models;
+mod extract;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -75,7 +77,6 @@ async fn main() -> Result<(), Error> {
                 let dir = dir_path.clone();
                 handle_opml_outline(&dir, &outline, &pool).await;
             }
-
         }
     } else {
         error!("Unknown url type: {}", url);
@@ -324,7 +325,6 @@ fn item_to_news_item(feed_id: uuid::Uuid, item: &Item) -> models::NewsItem {
 
 // write a test for the following function
 fn parse_date(dt: &str) -> Option<DateTime<Utc>> {
-
     let dt = &dt.replace(" GMT", " +0000");
 
     // ex. 'Tue, 1 Jul 2003 10:52:37 +0200'
@@ -373,7 +373,7 @@ fn parse_date(dt: &str) -> Option<DateTime<Utc>> {
                 let naive_date_time = d.and_hms_opt(0, 0, 0).unwrap();
                 let dt = DateTime::<Utc>::from_utc(naive_date_time, Utc);
                 return Some(dt);
-            },
+            }
             Err(_) => continue
         }
     }
@@ -385,8 +385,9 @@ fn parse_date(dt: &str) -> Option<DateTime<Utc>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use chrono::DateTime;
+
+    use super::*;
 
     #[test]
     fn test_another() {
@@ -481,7 +482,7 @@ async fn save_atom_content(dir_path: &str, feed: &Feed) -> Result<(), Error> {
             let title = entry.title.clone().value;
             let title_slug = slug::slugify(title);
             let maybe_content_url = get_atom_content_url(&entry.links).await;
-            download_content(&content_dir_path, &title_slug, maybe_content_url).await;
+            download_content(&content_dir_path, &title_slug, maybe_content_url, true).await;
         }
     }
 
@@ -507,7 +508,8 @@ async fn get_atom_content_url(links: &Vec<Link>) -> Option<String> {
 
 async fn download_content(content_dir: &String,
                           title_slug: &String,
-                          maybe_content_url: Option<String>) {
+                          maybe_content_url: Option<String>,
+                          extract_text: bool) {
     match maybe_content_url {
         None => {
             error!("No content URL found for item: {}", title_slug.clone());
@@ -519,21 +521,31 @@ async fn download_content(content_dir: &String,
                 error!("Attempted download with invalid URL: {}", url);
                 return;
             }
-            let safe_title_slug = safe_filename(&title_slug).await;
-            let content_file_path = format!("{}/{}.html", content_dir, safe_title_slug);
-            let mut item_content_file: fs::File = fs::File::create(&content_file_path).expect("Unable to create content file");
-            if !validate_url(&url).await {
-                return;
-            }
 
             let maybe_content = playwright_fetch(&url).await;
             match maybe_content {
                 None => {
                     error!("Unable to fetch content for item: {}", title_slug.clone());
                     return;
-                },
+                }
                 Some(content) => {
-                    let _ = item_content_file.write_all(content.as_bytes());
+                    let safe_title_slug = safe_filename(&title_slug).await;
+
+                    let content_file_path = format!("{}/{}.html", content_dir, safe_title_slug);
+                    let mut html_content_file: File = File::create(&content_file_path).expect("Unable to create html content file");
+                    let _ = html_content_file.write_all(content.as_bytes());
+
+                    if extract_text {
+                        let extract_result = extract_text_from_str(content, true).await;
+                        match extract_result {
+                            Ok(c) => {
+                                let content_text_path = format!("{}/{}-content.txt", content_dir, safe_title_slug);
+                                let mut text_content_file: File = File::create(&content_text_path).expect("Unable to create text content file");
+                                let _ = text_content_file.write_all(c.as_bytes());
+                            }
+                            Err(_) => {}
+                        }
+                    }
                 }
             }
         }
@@ -585,7 +597,7 @@ async fn save_rss_content(dir_path: &str, channel: &Channel) -> Result<(), Error
                 Some(title) => {
                     let title_slug = slug::slugify(title.clone());
                     let maybe_content_url = item.link.clone();
-                    download_content(&content_dir_path, &title_slug, maybe_content_url).await;
+                    download_content(&content_dir_path, &title_slug, maybe_content_url, true).await;
                 }
             }
         }
@@ -607,7 +619,7 @@ async fn playwright_fetch(url: &str) -> Option<String> {
     let page = context.new_page().await.expect("Unable to create page");
     let goto_result = page.goto_builder(url).goto().await;
     match goto_result {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(e) => {
             error!("Error navigating to URL: {}; {}", url, e);
             return None;
@@ -632,7 +644,7 @@ async fn validate_url(url: &str) -> bool {
                 return false;
             }
             true
-        },
+        }
         Err(e) => {
             error!("Invalid URL: {}; {}", url, e);
             false
