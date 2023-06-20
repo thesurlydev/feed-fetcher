@@ -605,7 +605,14 @@ async fn playwright_fetch(url: &str) -> Option<String> {
         .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
         .build().await.expect("Unable to build context");
     let page = context.new_page().await.expect("Unable to create page");
-    page.goto_builder(url).goto().await.expect("Unable to navigate to page");
+    let goto_result = page.goto_builder(url).goto().await;
+    match goto_result {
+        Ok(_) => {},
+        Err(e) => {
+            error!("Error navigating to URL: {}; {}", url, e);
+            return None;
+        }
+    }
     page.content().await.ok()
 }
 
